@@ -21,6 +21,30 @@ const pkg = require('../package.json');
 const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
+// Cross-platform open command
+function getOpenCommand() {
+  const platform = process.platform;
+  if (platform === 'darwin') return 'open';
+  if (platform === 'win32') return 'start';
+  return 'xdg-open'; // Linux
+}
+
+// Check if Python TTS dependencies are available
+async function checkTTSDependencies() {
+  try {
+    await execFileAsync('python3', ['-c', 'from TTS.api import TTS; print("ok")']);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// Check if input looks like a file path (has a supported extension)
+function looksLikeFilePath(input) {
+  const ext = path.extname(input).toLowerCase();
+  return ['.pdf', '.txt'].includes(ext);
+}
+
 const program = new Command();
 
 program
@@ -78,20 +102,24 @@ program
 
       // Process file or search query
       if (input) {
-        // Check if input is a file path
-        if (fs.existsSync(input)) {
-          // Validate file path for security
-          try {
-            const validatedPath = pathValidator.validateFilePath(input, {
-              mustExist: true,
-              allowedExtensions: ['.pdf', '.txt']
-            });
-            await processFile(validatedPath, options);
-          } catch (error) {
-            console.error('Error: Invalid file path');
-            console.error(error.message);
+        if (looksLikeFilePath(input)) {
+          // Input has a recognized file extension — must exist
+          if (!fs.existsSync(input)) {
+            console.error(`Error: File not found: ${input}`);
             process.exit(1);
           }
+          const validatedPath = pathValidator.validateFilePath(input, {
+            mustExist: true,
+            allowedExtensions: ['.pdf', '.txt']
+          });
+          await processFile(validatedPath, options);
+        } else if (fs.existsSync(input)) {
+          // Existing file without recognized extension
+          const validatedPath = pathValidator.validateFilePath(input, {
+            mustExist: true,
+            allowedExtensions: ['.pdf', '.txt']
+          });
+          await processFile(validatedPath, options);
         } else {
           // Treat as search query
           console.log(`Searching for: "${input}"\n`);
@@ -154,6 +182,17 @@ async function processFile(filePath, options = {}) {
     if (summaryOnly) return; // Don't create audiobook job
   }
 
+  // Check Python TTS dependencies before creating job
+  const hasTTS = await checkTTSDependencies();
+  if (!hasTTS) {
+    console.error('\n❌ Python TTS dependencies not found.');
+    console.error('\nTo generate audiobooks, install the required Python packages:');
+    console.error('  pip3 install TTS torch torchaudio\n');
+    console.error('This is a one-time setup (~2GB download).');
+    console.error('After installing, run your command again.\n');
+    throw new Error('Python TTS dependencies not installed');
+  }
+
   // Create job
   console.log('📋 Creating job...');
   const queue = new Queue();
@@ -212,7 +251,7 @@ async function generateSummary(filePath, text, summaryOnly = false) {
     console.log('─'.repeat(60));
     console.log(result.summary.substring(0, 500) + '...\n');
     console.log('─'.repeat(60));
-    console.log(`\nOpen full summary: open "${summaryPath}"\n`);
+    console.log(`\nOpen full summary: ${getOpenCommand()} "${summaryPath}"\n`);
   }
 }
 
@@ -388,7 +427,7 @@ async function openAudiobook(jobId) {
   if (jobId === true || !jobId) {
     // Open audiobooks directory
     const audiobooksDir = config.paths.audiobooks;
-    await execFileAsync('open', [audiobooksDir]);
+    await execFileAsync(getOpenCommand(), [audiobooksDir]);
     console.log(`Opened: ${audiobooksDir}\n`);
   } else {
     // Open specific job
@@ -406,7 +445,7 @@ async function openAudiobook(jobId) {
       return;
     }
 
-    await execFileAsync('open', [job.output_dir]);
+    await execFileAsync(getOpenCommand(), [job.output_dir]);
     console.log(`Opened: ${job.output_dir}\n`);
   }
 

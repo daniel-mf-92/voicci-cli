@@ -47,12 +47,8 @@ jobs:
           NODE_AUTH_TOKEN: ${{ secrets.NPM_TOKEN }}
 
       - name: Create GitHub Release
-        uses: actions/create-release@v1
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: softprops/action-gh-release@v2
         with:
-          tag_name: ${{ github.ref }}
-          release_name: Release ${{ github.ref }}
           body: |
             ## Installation
             ```bash
@@ -64,6 +60,4 @@ jobs:
             curl -fsSL https://voicci.com/voicci-cli/install.sh | bash
             ```
 
-            See [CHANGELOG.md](https://github.com/voicci/voicci-cli/blob/main/CHANGELOG.md) for details.
-          draft: false
-          prerelease: false
+            See [CHANGELOG.md](https://github.com/OlmiVanguard/voicci-cli/blob/main/CHANGELOG.md) for details.
