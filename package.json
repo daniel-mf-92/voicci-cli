@@ -39,10 +39,10 @@
   "license": "MIT",
   "repository": {
     "type": "git",
-    "url": "https://github.com/OlmiVanguard/voicci-cli.git"
+    "url": "https://github.com/daniel-mf-92/voicci-cli.git"
   },
   "bugs": {
-    "url": "https://github.com/OlmiVanguard/voicci-cli/issues"
+    "url": "https://github.com/daniel-mf-92/voicci-cli/issues"
   },
   "homepage": "https://voicci.com/voicci-cli",
   "dependencies": {

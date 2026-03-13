@@ -60,4 +60,4 @@ jobs:
             curl -fsSL https://voicci.com/voicci-cli/install.sh | bash
             ```
 
-            See [CHANGELOG.md](https://github.com/OlmiVanguard/voicci-cli/blob/main/CHANGELOG.md) for details.
+            See [CHANGELOG.md](https://github.com/daniel-mf-92/voicci-cli/blob/main/CHANGELOG.md) for details.
