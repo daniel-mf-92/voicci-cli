@@ -63,17 +63,11 @@ class TTSEngine:
         full_text = '. '.join(sentences)
 
         try:
-            # Generate speech with quality parameters
-            tts_kwargs = {}
-            for param in ('speed', 'temperature', 'top_p', 'repetition_penalty'):
-                if hasattr(self, param):
-                    tts_kwargs[param] = getattr(self, param)
-
+            # Generate speech
             self.tts.tts_to_file(
                 text=full_text,
                 file_path=output_file,
-                language="en",
-                **tts_kwargs
+                language="en"
             )
 
             print(f"Generated: {output_file}", file=sys.stderr)
@@ -113,27 +107,18 @@ class TTSEngine:
 
 
 def main():
-    import argparse
+    if len(sys.argv) < 3:
+        print("Usage: tts-engine.py <chapters.json> <output_dir>", file=sys.stderr)
+        sys.exit(1)
 
-    parser = argparse.ArgumentParser(description='Voicci TTS Engine')
-    parser.add_argument('chapters_file', help='Path to chapters JSON file')
-    parser.add_argument('output_dir', help='Output directory for audio files')
-    parser.add_argument('--speed', type=float, default=1.0, help='Speech speed')
-    parser.add_argument('--temperature', type=float, default=0.65, help='Generation temperature')
-    parser.add_argument('--top-p', type=float, default=0.8, help='Top-p sampling')
-    parser.add_argument('--repetition-penalty', type=float, default=5.0, help='Repetition penalty')
+    chapters_file = sys.argv[1]
+    output_dir = sys.argv[2]
 
-    args = parser.parse_args()
-
-    # Initialize engine with quality parameters
+    # Initialize engine
     engine = TTSEngine()
-    engine.speed = args.speed
-    engine.temperature = args.temperature
-    engine.top_p = args.top_p
-    engine.repetition_penalty = args.repetition_penalty
 
     # Generate audiobook
-    results = engine.generate_audiobook(args.chapters_file, args.output_dir)
+    results = engine.generate_audiobook(chapters_file, output_dir)
 
     # Output results as JSON
     print(json.dumps(results))

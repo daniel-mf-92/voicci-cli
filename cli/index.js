@@ -760,4 +760,133 @@ program
     console.log();
   });
 
+program
+  .command('doctor')
+  .description('Verify Node, Python, TTS, PyTorch, and AI-editor skill installation')
+  .option('--json', 'Output machine-readable JSON')
+  .action(async (options) => {
+    const results = await runDoctor();
+    if (options.json) {
+      console.log(JSON.stringify(results, null, 2));
+    } else {
+      printDoctorReport(results);
+    }
+    const failed = results.checks.some(c => c.status === 'fail');
+    process.exit(failed ? 1 : 0);
+  });
+
+async function runDoctor() {
+  const os = await import('os');
+  const checks = [];
+
+  const nodeMajor = parseInt(process.versions.node.split('.')[0], 10);
+  checks.push({
+    name: 'Node.js ≥ 22',
+    status: nodeMajor >= 22 ? 'pass' : 'fail',
+    detail: `v${process.versions.node}`,
+    fix: nodeMajor >= 22 ? null : 'Install Node 22+: https://nodejs.org/en/download',
+  });
+
+  let pythonCmd = null;
+  let pythonVersion = null;
+  for (const cand of ['python3', 'python']) {
+    try {
+      const { stdout } = await execFileAsync(cand, ['--version']);
+      const m = stdout.match(/Python (\d+)\.(\d+)/);
+      if (m) {
+        pythonCmd = cand;
+        pythonVersion = `${m[1]}.${m[2]}`;
+        if (parseInt(m[1], 10) === 3 && parseInt(m[2], 10) >= 10) break;
+      }
+    } catch {}
+  }
+  const pyOk = pythonVersion && parseInt(pythonVersion.split('.')[0], 10) === 3 && parseInt(pythonVersion.split('.')[1], 10) >= 10;
+  checks.push({
+    name: 'Python ≥ 3.10',
+    status: pyOk ? 'pass' : 'fail',
+    detail: pythonVersion ? `${pythonCmd} ${pythonVersion}` : 'not found',
+    fix: pyOk ? null : 'Install Python 3.10+: https://www.python.org/downloads/',
+  });
+
+  let torchOk = false, torchDetail = 'not importable';
+  if (pythonCmd) {
+    try {
+      const { stdout } = await execFileAsync(pythonCmd, ['-c', 'import torch; print(torch.__version__)']);
+      torchOk = true;
+      torchDetail = `torch ${stdout.trim()}`;
+    } catch {}
+  }
+  checks.push({
+    name: 'PyTorch',
+    status: torchOk ? 'pass' : 'fail',
+    detail: torchDetail,
+    fix: torchOk ? null : `${pythonCmd || 'pip3'} -m pip install torch torchaudio`,
+  });
+
+  let ttsOk = false, ttsDetail = 'not importable';
+  if (pythonCmd) {
+    try {
+      const { stdout } = await execFileAsync(pythonCmd, ['-c', 'import TTS; print(TTS.__version__)']);
+      ttsOk = true;
+      ttsDetail = `TTS ${stdout.trim()}`;
+    } catch {}
+  }
+  checks.push({
+    name: 'TTS (XTTS v2)',
+    status: ttsOk ? 'pass' : 'fail',
+    detail: ttsDetail,
+    fix: ttsOk ? null : `${pythonCmd || 'pip3'} -m pip install TTS`,
+  });
+
+  let accel = 'cpu';
+  if (pythonCmd && torchOk) {
+    try {
+      const { stdout } = await execFileAsync(pythonCmd, ['-c',
+        'import torch; print("mps" if torch.backends.mps.is_available() else ("cuda" if torch.cuda.is_available() else "cpu"))']);
+      accel = stdout.trim();
+    } catch {}
+  }
+  checks.push({
+    name: 'Acceleration',
+    status: accel === 'cpu' ? 'warn' : 'pass',
+    detail: accel.toUpperCase(),
+    fix: accel === 'cpu' ? 'CPU works but is slow. M-series/NVIDIA recommended.' : null,
+  });
+
+  const home = os.homedir();
+  const skillPath = path.join(home, '.claude', 'skills', 'voicci', 'SKILL.md');
+  const skillExists = fs.existsSync(skillPath);
+  checks.push({
+    name: 'Claude Code skill',
+    status: skillExists ? 'pass' : 'warn',
+    detail: skillExists ? skillPath : 'not installed (harmless if you do not use Claude Code)',
+    fix: skillExists ? null : 'Re-run: npm install -g voicci',
+  });
+
+  return {
+    voicciVersion: pkg.version,
+    platform: process.platform,
+    arch: process.arch,
+    checks,
+  };
+}
+
+function printDoctorReport(results) {
+  console.log('\n🩺 Voicci Doctor\n');
+  console.log(`   voicci@${results.voicciVersion}  ·  ${results.platform}/${results.arch}\n`);
+  const pad = (s, n) => (s + ' '.repeat(n)).slice(0, n);
+  for (const c of results.checks) {
+    const icon = c.status === 'pass' ? '✅' : c.status === 'warn' ? '⚠️ ' : '❌';
+    console.log(`   ${icon}  ${pad(c.name, 22)} ${c.detail}`);
+    if (c.fix) console.log(`       ↳ ${c.fix}`);
+  }
+  const failed = results.checks.filter(c => c.status === 'fail');
+  console.log('');
+  if (failed.length === 0) {
+    console.log('   🎉 All required prerequisites look good. You are ready to generate audiobooks.\n');
+  } else {
+    console.log(`   ${failed.length} check(s) failed. Fix them and re-run \`voicci doctor\`.\n`);
+  }
+}
+
 program.parse();

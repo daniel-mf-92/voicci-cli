@@ -1,6 +1,6 @@
 {
   "name": "voicci",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "description": "AI-Powered Audiobook Generator for Claude Code, OpenCode & AI Code Editors. Convert books and PDFs to audiobooks using natural language.",
   "type": "module",
   "main": "cli/index.js",

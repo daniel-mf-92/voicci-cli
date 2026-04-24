@@ -1,0 +1,242 @@
+#!/usr/bin/env node
+
+import Database from 'better-sqlite3';
+import { v4 as uuidv4 } from 'uuid';
+import config from './config.js';
+
+class Queue {
+  constructor() {
+    this.db = new Database(config.paths.queue);
+    this.initDatabase();
+  }
+
+  initDatabase() {
+    // Create jobs table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS jobs (
+        id TEXT PRIMARY KEY,
+        title TEXT NOT NULL,
+        source_file TEXT NOT NULL,
+        status TEXT NOT NULL,
+        total_chapters INTEGER NOT NULL,
+        completed_chapters INTEGER DEFAULT 0,
+        total_words INTEGER NOT NULL,
+        estimated_minutes INTEGER NOT NULL,
+        output_dir TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        error TEXT
+      )
+    `);
+
+    // Create chapters table
+    this.db.exec(`
+      CREATE TABLE IF NOT EXISTS chapters (
+        id TEXT PRIMARY KEY,
+        job_id TEXT NOT NULL,
+        chapter_num INTEGER NOT NULL,
+        title TEXT NOT NULL,
+        text TEXT NOT NULL,
+        word_count INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        audio_file TEXT,
+        created_at INTEGER NOT NULL,
+        updated_at INTEGER NOT NULL,
+        started_at INTEGER,
+        completed_at INTEGER,
+        error TEXT,
+        FOREIGN KEY (job_id) REFERENCES jobs (id) ON DELETE CASCADE
+      )
+    `);
+
+    // Create indices
+    this.db.exec(`
+      CREATE INDEX IF NOT EXISTS idx_jobs_status ON jobs(status);
+      CREATE INDEX IF NOT EXISTS idx_chapters_job_id ON chapters(job_id);
+      CREATE INDEX IF NOT EXISTS idx_chapters_status ON chapters(status);
+    `);
+  }
+
+  createJob(sourceFile, chapters) {
+    const jobId = uuidv4();
+    const now = Date.now();
+    const title = sourceFile.split('/').pop().replace(/\.(pdf|txt)$/i, '');
+    const totalWords = chapters.reduce((sum, ch) => sum + (ch.wordCount || 0), 0);
+    const estimatedMinutes = Math.ceil(totalWords / 150); // ~150 words per minute
+
+    // Insert job
+    const insertJob = this.db.prepare(`
+      INSERT INTO jobs (
+        id, title, source_file, status, total_chapters, total_words,
+        estimated_minutes, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    insertJob.run(
+      jobId,
+      title,
+      sourceFile,
+      'pending',
+      chapters.length,
+      totalWords,
+      estimatedMinutes,
+      now,
+      now
+    );
+
+    // Insert chapters
+    const insertChapter = this.db.prepare(`
+      INSERT INTO chapters (
+        id, job_id, chapter_num, title, text, word_count,
+        status, created_at, updated_at
+      ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    `);
+
+    const insertMany = this.db.transaction((chapters) => {
+      for (const chapter of chapters) {
+        insertChapter.run(
+          uuidv4(),
+          jobId,
+          chapter.number,
+          chapter.title,
+          chapter.text,
+          chapter.wordCount,
+          'pending',
+          now,
+          now
+        );
+      }
+    });
+
+    insertMany(chapters);
+
+    return {
+      jobId,
+      title,
+      chapters: chapters.length,
+      estimatedMinutes,
+      totalWords
+    };
+  }
+
+  getJob(jobId) {
+    const job = this.db.prepare('SELECT * FROM jobs WHERE id = ?').get(jobId);
+    if (!job) return null;
+
+    const chapters = this.db.prepare(`
+      SELECT * FROM chapters WHERE job_id = ? ORDER BY chapter_num
+    `).all(jobId);
+
+    return { ...job, chapters };
+  }
+
+  getAllJobs() {
+    return this.db.prepare(`
+      SELECT * FROM jobs ORDER BY created_at DESC
+    `).all();
+  }
+
+  getNextPendingJob() {
+    return this.db.prepare(`
+      SELECT * FROM jobs WHERE status = 'pending' ORDER BY created_at LIMIT 1
+    `).get();
+  }
+
+  getNextPendingChapter(jobId) {
+    return this.db.prepare(`
+      SELECT * FROM chapters
+      WHERE job_id = ? AND status = 'pending'
+      ORDER BY chapter_num
+      LIMIT 1
+    `).get(jobId);
+  }
+
+  updateJobStatus(jobId, status, error = null) {
+    const updates = { status, updated_at: Date.now() };
+
+    if (status === 'processing') {
+      updates.started_at = Date.now();
+    } else if (status === 'completed' || status === 'failed') {
+      updates.completed_at = Date.now();
+    }
+
+    if (error) {
+      updates.error = error;
+    }
+
+    const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    const values = Object.values(updates);
+
+    this.db.prepare(`UPDATE jobs SET ${fields} WHERE id = ?`)
+      .run(...values, jobId);
+  }
+
+  updateJobOutputDir(jobId, outputDir) {
+    this.db.prepare('UPDATE jobs SET output_dir = ?, updated_at = ? WHERE id = ?')
+      .run(outputDir, Date.now(), jobId);
+  }
+
+  updateChapterStatus(chapterId, status, audioFile = null, error = null) {
+    const updates = { status, updated_at: Date.now() };
+
+    if (status === 'processing') {
+      updates.started_at = Date.now();
+    } else if (status === 'completed' || status === 'failed') {
+      updates.completed_at = Date.now();
+    }
+
+    if (audioFile) {
+      updates.audio_file = audioFile;
+    }
+
+    if (error) {
+      updates.error = error;
+    }
+
+    const fields = Object.keys(updates).map(k => `${k} = ?`).join(', ');
+    const values = Object.values(updates);
+
+    this.db.prepare(`UPDATE chapters SET ${fields} WHERE id = ?`)
+      .run(...values, chapterId);
+
+    // Update job's completed chapters count
+    const chapter = this.db.prepare('SELECT job_id FROM chapters WHERE id = ?').get(chapterId);
+    if (chapter && status === 'completed') {
+      this.db.prepare(`
+        UPDATE jobs
+        SET completed_chapters = (
+          SELECT COUNT(*) FROM chapters WHERE job_id = ? AND status = 'completed'
+        ),
+        updated_at = ?
+        WHERE id = ?
+      `).run(chapter.job_id, Date.now(), chapter.job_id);
+    }
+  }
+
+  deleteJob(jobId) {
+    // Chapters are deleted automatically via CASCADE
+    this.db.prepare('DELETE FROM jobs WHERE id = ?').run(jobId);
+  }
+
+  getStats() {
+    const stats = this.db.prepare(`
+      SELECT
+        COUNT(*) as total_jobs,
+        SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed_jobs,
+        SUM(CASE WHEN status = 'processing' THEN 1 ELSE 0 END) as processing_jobs,
+        SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending_jobs,
+        SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed_jobs
+      FROM jobs
+    `).get();
+
+    return stats;
+  }
+
+  close() {
+    this.db.close();
+  }
+}
+
+export default Queue;

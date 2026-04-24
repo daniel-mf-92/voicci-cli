@@ -128,8 +128,8 @@ cd "$TEMP_DIR"
 
 # Download from GitHub (or serve from voicci.com/voicci-cli/releases)
 echo "Downloading Voicci..."
-git clone --depth 1 https://github.com/daniel-mf-92/voicci-cli.git
-cd voicci-cli
+git clone --depth 1 https://github.com/voicci/voicci-cli.git
+cd voicci
 
 # Install Node dependencies
 echo ""

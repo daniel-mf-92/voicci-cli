@@ -25,11 +25,27 @@ Transform books and PDFs into audiobooks using natural language with Claude Code
 
 ### Installation
 
+**Prerequisites** (one-time):
+
+- Node.js 22+
+- Python 3.10+
+- `pip3 install TTS torch torchaudio` — Voicci uses XTTS v2 locally (PyTorch + Coqui TTS; ~2 GB of model weights download on first run)
+
+**Install the CLI:**
+
 ```bash
 npm install -g voicci
 ```
 
-That's it! The package installs both the CLI tool and Claude Code skill automatically.
+**Verify everything is wired up:**
+
+```bash
+voicci doctor
+```
+
+`voicci doctor` prints a PASS/FAIL table for Node, Python, TTS, PyTorch, acceleration (MPS/CUDA/CPU), and the AI-editor skill directory. If anything fails, it tells you the exact command to fix it.
+
+The npm package installs the CLI plus the Claude Code / OpenCode / Cursor / Windsurf skill files. **Restart your AI editor** after install so it picks up `/voicci`.
 
 ### Usage with AI Code Editors
 

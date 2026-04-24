@@ -139,6 +139,7 @@ cat > package.json <<'EOF'
   },
   "dependencies": {
     "commander": "^11.1.0",
+    "better-sqlite3": "^9.2.2",
     "uuid": "^9.0.1",
     "ink": "^4.4.1",
     "react": "^18.2.0",

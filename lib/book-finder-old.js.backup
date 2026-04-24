@@ -1,0 +1,263 @@
+#!/usr/bin/env node
+
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import fs from 'fs';
+import path from 'path';
+import config from './config.js';
+
+const execAsync = promisify(exec);
+
+class BookFinder {
+  constructor() {
+    this.sources = [
+      {
+        name: 'LibGen',
+        searchUrl: 'http://libgen.rs/search.php',
+        priority: 1
+      },
+      {
+        name: 'AnnaArchive',
+        searchUrl: 'https://annas-archive.org',
+        priority: 2
+      },
+      {
+        name: 'ZLib',
+        searchUrl: 'https://z-lib.gs',
+        priority: 3
+      }
+    ];
+
+    this.downloadDir = path.join(config.paths.temp, 'downloads');
+    fs.mkdirSync(this.downloadDir, { recursive: true });
+  }
+
+  async search(query, limit = 5) {
+    console.log(`Searching ${this.sources.length} sources...`);
+
+    // Try each source in priority order
+    for (const source of this.sources.sort((a, b) => a.priority - b.priority)) {
+      try {
+        console.log(`  Trying ${source.name}...`);
+        const results = await this.searchSource(source, query);
+
+        if (results.length > 0) {
+          console.log(`  ✓ Found ${results.length} results from ${source.name}`);
+          return results.slice(0, limit);
+        }
+      } catch (error) {
+        console.log(`  ✗ ${source.name} failed: ${error.message}`);
+        continue;
+      }
+    }
+
+    return [];
+  }
+
+  async searchSource(source, query) {
+    // Use curl with specific search endpoints
+    if (source.name === 'LibGen') {
+      return await this.searchLibGen(query);
+    } else if (source.name === 'AnnaArchive') {
+      return await this.searchAnnaArchive(query);
+    } else if (source.name === 'ZLib') {
+      return await this.searchZLib(query);
+    }
+
+    return [];
+  }
+
+  async searchLibGen(query) {
+    const searchQuery = encodeURIComponent(query);
+    const url = `http://libgen.rs/search.php?req=${searchQuery}&res=100&view=simple&phrase=1&column=def`;
+
+    try {
+      // Use curl to fetch search results
+      const { stdout } = await execAsync(`curl -s -L "${url}"`);
+
+      // Parse HTML to extract book info
+      const results = this.parseLibGenHTML(stdout);
+      return results.map(r => ({ ...r, source: 'LibGen' }));
+    } catch (error) {
+      throw new Error(`LibGen search failed: ${error.message}`);
+    }
+  }
+
+  parseLibGenHTML(html) {
+    const results = [];
+
+    // Simple regex parsing (not ideal but works for basic cases)
+    // Look for table rows with book info
+    const rowPattern = /<tr[^>]*>.*?<\/tr>/gs;
+    const rows = html.match(rowPattern) || [];
+
+    for (const row of rows.slice(1)) { // Skip header row
+      try {
+        // Extract title
+        const titleMatch = row.match(/<a[^>]*title="([^"]*)"[^>]*>([^<]+)<\/a>/);
+        const title = titleMatch ? (titleMatch[1] || titleMatch[2]) : null;
+
+        // Extract author
+        const authorMatch = row.match(/<td[^>]*>(.*?)<\/td>/g);
+        const author = authorMatch && authorMatch[1]
+          ? authorMatch[1].replace(/<[^>]*>/g, '').trim()
+          : null;
+
+        // Extract download link
+        const linkMatch = row.match(/href="([^"]*md5=[^"]*)"/);
+        const downloadPage = linkMatch ? linkMatch[1] : null;
+
+        if (title && downloadPage) {
+          results.push({
+            title: title.trim(),
+            author: author || 'Unknown',
+            downloadUrl: downloadPage.startsWith('http')
+              ? downloadPage
+              : `http://libgen.rs/${downloadPage}`,
+            format: 'pdf'
+          });
+        }
+      } catch (e) {
+        // Skip malformed rows
+        continue;
+      }
+    }
+
+    return results.slice(0, 10);
+  }
+
+  async searchAnnaArchive(query) {
+    const searchQuery = encodeURIComponent(query);
+    const url = `https://annas-archive.org/search?q=${searchQuery}`;
+
+    try {
+      const { stdout } = await execAsync(`curl -s -L "${url}"`);
+
+      // Parse Anna's Archive results
+      const results = this.parseAnnaArchiveHTML(stdout);
+      return results.map(r => ({ ...r, source: 'AnnaArchive' }));
+    } catch (error) {
+      throw new Error(`Anna's Archive search failed: ${error.message}`);
+    }
+  }
+
+  parseAnnaArchiveHTML(html) {
+    const results = [];
+
+    // Anna's Archive has a JSON API we could use instead
+    // For now, basic HTML parsing
+    const linkPattern = /<a[^>]*href="\/md5\/([^"]*)"[^>]*>(.*?)<\/a>/gs;
+    const matches = html.matchAll(linkPattern);
+
+    for (const match of matches) {
+      const md5 = match[1];
+      const title = match[2].replace(/<[^>]*>/g, '').trim();
+
+      if (title && md5) {
+        results.push({
+          title,
+          author: 'Unknown',
+          downloadUrl: `https://annas-archive.org/md5/${md5}`,
+          format: 'pdf'
+        });
+      }
+    }
+
+    return results.slice(0, 10);
+  }
+
+  async searchZLib(query) {
+    // Z-Library often requires authentication
+    // For now, return empty results
+    return [];
+  }
+
+  async download(book) {
+    console.log(`Downloading from ${book.source}...`);
+
+    // Generate safe filename
+    const filename = book.title
+      .replace(/[^a-z0-9]/gi, '_')
+      .toLowerCase()
+      .substring(0, 100) + '.pdf';
+
+    const outputPath = path.join(this.downloadDir, filename);
+
+    if (book.source === 'LibGen') {
+      await this.downloadFromLibGen(book.downloadUrl, outputPath);
+    } else if (book.source === 'AnnaArchive') {
+      await this.downloadFromAnnaArchive(book.downloadUrl, outputPath);
+    } else {
+      throw new Error(`Download not supported for source: ${book.source}`);
+    }
+
+    return outputPath;
+  }
+
+  async downloadFromLibGen(pageUrl, outputPath) {
+    // First, fetch the download page to get actual PDF link
+    const { stdout: pageDirect } = await execAsync(`curl -s -L "${pageUrl}"`);
+
+    // Look for direct download link
+    const linkMatch = pageHtml.match(/href="(https?:\/\/[^"]*\.pdf)"/i);
+
+    if (!linkMatch) {
+      // Try alternative download sources
+      const altMatch = pageHtml.match(/<a[^>]*href="([^"]*)"[^>]*>GET<\/a>/i);
+
+      if (altMatch) {
+        const downloadUrl = altMatch[1];
+        await execAsync(`curl -L -o "${outputPath}" "${downloadUrl}"`);
+        return;
+      }
+
+      throw new Error('Could not find PDF download link');
+    }
+
+    const pdfUrl = linkMatch[1];
+
+    // Download PDF
+    await execAsync(`curl -L -o "${outputPath}" "${pdfUrl}"`);
+
+    // Verify download
+    if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 1000) {
+      throw new Error('Download failed or file too small');
+    }
+  }
+
+  async downloadFromAnnaArchive(pageUrl, outputPath) {
+    // Fetch download page
+    const { stdout: pageHtml } = await execAsync(`curl -s -L "${pageUrl}"`);
+
+    // Look for download button/link
+    const linkMatch = pageHtml.match(/href="([^"]*download[^"]*)"/i);
+
+    if (!linkMatch) {
+      throw new Error('Could not find download link');
+    }
+
+    const downloadUrl = linkMatch[1].startsWith('http')
+      ? linkMatch[1]
+      : `https://annas-archive.org${linkMatch[1]}`;
+
+    // Download
+    await execAsync(`curl -L -o "${outputPath}" "${downloadUrl}"`);
+
+    // Verify
+    if (!fs.existsSync(outputPath) || fs.statSync(outputPath).size < 1000) {
+      throw new Error('Download failed or file too small');
+    }
+  }
+
+  async verify(filePath) {
+    // Verify PDF is valid
+    try {
+      const { stdout } = await execAsync(`pdfinfo "${filePath}"`);
+      return stdout.includes('Pages:');
+    } catch (error) {
+      return false;
+    }
+  }
+}
+
+export default BookFinder;
