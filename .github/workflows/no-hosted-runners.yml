@@ -1,0 +1,52 @@
+name: no-hosted-runners-guard
+
+# Strict rule (2026-05-04): all workflows in this repo must use self-hosted
+# runners only. This guard rejects any change that introduces a GitHub-hosted
+# runner (ubuntu-*, macos-*, windows-*).
+#
+# Runs on self-hosted; if no runner is registered for this repo the job
+# queues and merging via branch protection is blocked, which is desired —
+# the repo either gets a runner registered or the offending workflow removed.
+
+on:
+  push:
+    paths:
+      - '.github/workflows/**'
+  pull_request:
+    paths:
+      - '.github/workflows/**'
+
+concurrency:
+  group: no-hosted-runners-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  scan:
+    runs-on: self-hosted
+    steps:
+      - uses: actions/checkout@v4
+      - name: Reject hosted runners in workflow files
+        shell: bash
+        run: |
+          set -euo pipefail
+          shopt -s nullglob
+          bad=0
+          pat='^[[:space:]]*runs-on:[[:space:]]*\[?[[:space:]]*"?(ubuntu-(latest|[0-9.]+(-arm)?)|macos-(latest|[0-9]+)|windows-(latest|[0-9]+))"?'
+          for f in .github/workflows/*.yml .github/workflows/*.yaml; do
+            [ "$(basename "$f")" = "no-hosted-runners.yml" ] && continue
+            if grep -nE "$pat" "$f" >/dev/null 2>&1; then
+              echo "::error file=$f::GitHub-hosted runner detected — self-hosted only."
+              grep -nE "$pat" "$f" | sed "s|^|$f:|"
+              bad=1
+            fi
+          done
+          if [ $bad -ne 0 ]; then
+            echo ""
+            echo "Strict rule: all runs-on values must be self-hosted."
+            echo "See feedback_self_hosted_runners_only.md."
+            exit 1
+          fi
+          echo "OK — no GitHub-hosted runners detected."
